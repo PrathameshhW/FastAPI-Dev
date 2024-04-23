@@ -1,12 +1,22 @@
-from fastapi import FastAPI, status, HTTPException
+from fastapi import FastAPI, status, HTTPException, Depends
+from httpx import post
 from pydantic import BaseModel
 from random import randrange
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import time
+from . import models
+from .database import engine, SessionLocal, get_db
+from sqlalchemy.orm import Session
+
+models.Base.metadata.create_all(bind=engine)
+
 
 app = FastAPI()
 
+
+
+        
 class Post(BaseModel):
     title: str
     content: str
@@ -30,25 +40,36 @@ async def root():
     return {"message": "Hello, world!"}
 
 @app.get("/posts")
-async def get_posts():
-    cursor.execute("SELECT * FROM posts")
-    posts = cursor.fetchall()
+async def get_posts(db: Session = Depends(get_db)):
+    # cursor.execute("SELECT * FROM posts")
+    # posts = cursor.fetchall()
+
+    posts = db.query(models.Post).all()
     return {"data": posts}
 
 @app.post("/posts", status_code=status.HTTP_201_CREATED)
-async def create_post(post: Post):
-    cursor.execute("INSERT INTO posts (title, content, published) VALUES (%s, %s, %s) RETURNING *", (post.title, post.content, post.published))
-    created_post = cursor.fetchone()
-    conn.commit()
+async def create_post(post: Post, db: Session = Depends(get_db)):
+    # cursor.execute("INSERT INTO posts (title, content, published) VALUES (%s, %s, %s) RETURNING *", (post.title, post.content, post.published))
+    # created_post = cursor.fetchone()
+    # conn.commit()
+
+    
+    created_post = models.Post(**post.model_dump())
+    db.add(created_post)
+    db.commit() # * TO commit the changes in database
+    db.refresh(created_post) # ? RETURNING statmeent according to sqlalchemy
     if post is not None:
         return {"data": created_post}
     else:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post does not exist")
 
+
 @app.get("/post/{id}")
-async def get_single_post(id: int):
-    cursor.execute("SELECT * FROM posts WHERE id = %s", (str(id),))
-    post = cursor.fetchone()
+async def get_single_post(id: int, db: Session = Depends(get_db)):
+    # cursor.execute("SELECT * FROM posts WHERE id = %s", (str(id),))
+    # post = cursor.fetchone()
+
+    post = db.query(models.Post).filter(models.Post.id == id).first()
     if post is not None:
         return {"data": post}
     else:
@@ -56,18 +77,33 @@ async def get_single_post(id: int):
 
 
 @app.delete("/post/{id}", status_code=status.HTTP_202_ACCEPTED)
-async def delete_post(id: int):
-    cursor.execute("DELETE FROM posts WHERE id = %s RETURNING *", (str(id),))
-    delete_post = cursor.fetchone()
-    conn.commit()
+async def delete_post(id: int, db: Session = Depends(get_db)):
+    # cursor.execute("DELETE FROM posts WHERE id = %s RETURNING *", (str(id),))
+    # delete_post = cursor.fetchone()
+    # conn.commit()
+
+    delete_post = db.query(models.Post).filter(models.Post.id == id)
     if delete_post is not None:
+        delete_post.delete(synchronize_session=False)
+        db.commit()
         return {"data": "Post deleted"}
     else:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post does not exist")
 
 @app.post('/post/{id}')
-async def update_post(id: int, post: Post):
-    cursor.execute("UPDATE posts SET title = %s, content = %s, published = %s WHERE id = %s RETURNING *", (post.title, post.content, post.published, str(id)))
-    update_post = cursor.fetchone()
-    conn.commit()
-    return {"data": update_post}
+async def update_post(id: int, payload: Post, db: Session = Depends(get_db)):
+    # cursor.execute("UPDATE posts SET title = %s, content = %s, published = %s WHERE id = %s RETURNING *", (post.title, post.content, post.published, str(id)))
+    # update_post = cursor.fetchone()
+    # conn.commit()
+
+    post_query = db.query(models.Post).filter(models.Post.id == id)
+    post = post_query.first()
+
+    if post == None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+    
+    post_query.update(**payload.model_dump(), synchronize_session=False)
+    db.commit()
+
+    return {}
+    
